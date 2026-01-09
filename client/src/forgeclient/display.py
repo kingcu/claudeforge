@@ -1,5 +1,7 @@
 """Terminal display using Rich."""
+from datetime import datetime, timedelta
 from rich.console import Console
+from rich.table import Table
 
 console = Console()
 
@@ -14,6 +16,124 @@ def format_number(n: int) -> str:
     if n >= 1_000:
         return f"{n / 1_000:.1f}K"
     return str(n)
+
+
+def _calculate_streak(data: list[dict]) -> int:
+    """Calculate consecutive days of usage ending today or yesterday."""
+    if not data:
+        return 0
+
+    today = datetime.now().strftime('%Y-%m-%d')
+    yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+
+    dates_with_usage = {d["date"] for d in data if d.get("total_tokens", 0) > 0}
+
+    # Start counting from today or yesterday
+    if today in dates_with_usage:
+        start = datetime.now()
+    elif yesterday in dates_with_usage:
+        start = datetime.now() - timedelta(days=1)
+    else:
+        return 0
+
+    streak = 0
+    current = start
+    while current.strftime('%Y-%m-%d') in dates_with_usage:
+        streak += 1
+        current -= timedelta(days=1)
+
+    return streak
+
+
+def _mini_sparkline(values: list[int], width: int = 7) -> str:
+    """Create a mini sparkline from values."""
+    if not values:
+        return ""
+    max_val = max(values) if max(values) > 0 else 1
+    return "".join(BAR_CHARS[min(8, int(v / max_val * 8))] for v in values[-width:])
+
+
+def render_recent_table(data: list[dict], days: int = 7):
+    """Render a table of recent daily usage with stats."""
+    if not data:
+        console.print("[yellow]No usage data available[/yellow]")
+        return
+
+    # Calculate 30-day average
+    avg_30d = sum(d.get("total_tokens", 0) for d in data) / len(data) if data else 0
+
+    # Get last N days
+    recent = data[-days:] if len(data) >= days else data
+
+    # Calculate streak
+    streak = _calculate_streak(data)
+
+    # Build table
+    table = Table(title="Recent Usage", show_header=True, header_style="bold cyan")
+    table.add_column("Date", style="dim")
+    table.add_column("Day", style="dim")
+    table.add_column("Tokens", justify="right")
+    table.add_column("vs Avg", justify="right")
+    table.add_column("Trend", justify="center")
+    table.add_column("Spark", justify="left")
+
+    prev_total = None
+    totals = [d.get("total_tokens", 0) for d in recent]
+
+    for i, day in enumerate(recent):
+        date_str = day["date"]
+        total = day.get("total_tokens", 0)
+
+        # Day of week
+        try:
+            dt = datetime.strptime(date_str, '%Y-%m-%d')
+            dow = dt.strftime('%a')
+        except ValueError:
+            dow = "?"
+
+        # Format tokens
+        tokens_str = format_number(total)
+
+        # Percentage of average
+        if avg_30d > 0:
+            pct = (total / avg_30d) * 100
+            if pct >= 150:
+                pct_str = f"[bold green]{pct:.0f}%[/bold green]"
+            elif pct >= 80:
+                pct_str = f"[green]{pct:.0f}%[/green]"
+            elif pct >= 50:
+                pct_str = f"[yellow]{pct:.0f}%[/yellow]"
+            else:
+                pct_str = f"[dim]{pct:.0f}%[/dim]"
+        else:
+            pct_str = "-"
+
+        # Trend vs previous day
+        if prev_total is not None and prev_total > 0:
+            change = ((total - prev_total) / prev_total) * 100
+            if change > 20:
+                trend = "[green]↑[/green]"
+            elif change < -20:
+                trend = "[red]↓[/red]"
+            else:
+                trend = "[dim]→[/dim]"
+        else:
+            trend = ""
+
+        # Mini sparkline showing position in week
+        spark = _mini_sparkline(totals[:i+1])
+
+        table.add_row(date_str[5:], dow, tokens_str, pct_str, trend, f"[green]{spark}[/green]")
+        prev_total = total
+
+    console.print()
+    console.print(table)
+
+    # Summary line
+    total_recent = sum(totals)
+    console.print()
+    console.print(f"  [bold]Week total:[/bold] {format_number(total_recent)}  │  [bold]30d avg:[/bold] {format_number(int(avg_30d))}/day  │  [bold]Streak:[/bold] {streak} day{'s' if streak != 1 else ''} {'🔥' if streak >= 7 else ''}")
+    console.print()
 
 
 def render_daily_graph(data: list[dict], title: str):

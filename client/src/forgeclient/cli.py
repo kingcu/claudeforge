@@ -10,7 +10,7 @@ from .config import load_config, set_config_value, save_config
 from .sync import maybe_auto_sync, do_sync, fetch_daily_stats, test_connection
 from .claude_code import get_local_daily_stats, get_local_model_usage, get_local_summary, get_daily_stats_from_sessions
 from .local_cache import get_pending_count, list_pending, process_pending_syncs, compute_daily_deltas, get_usage_snapshots
-from .display import console, render_daily_graph, show_sync_status, show_stale_warning, render_model_usage
+from .display import console, render_daily_graph, render_recent_table, show_sync_status, show_stale_warning, render_model_usage
 
 
 def setup_logging(verbose: bool):
@@ -227,29 +227,32 @@ def sync(force: bool, retry: bool, status: bool):
 # === Stats commands ===
 
 @cli.command()
-@click.option('--days', '-d', default=30, help='Number of days to show')
+@click.option('--days', '-d', default=30, help='Number of days of history to fetch')
 @click.option('--local', is_flag=True, help='Show local data only (no server)')
+@click.option('--graph', '-g', is_flag=True, help='Show full graph instead of table')
 @click.option('--output-only', is_flag=True, help='Show only output tokens (exclude cache)')
-def tokens(days: int, local: bool, output_only: bool):
-    """Show daily token usage graph.
+def tokens(days: int, local: bool, graph: bool, output_only: bool):
+    """Show daily token usage.
 
-    By default, shows all tokens including cache by parsing session files.
-    Use --output-only to show only output tokens (faster, uses stats-cache.json).
+    By default shows a table of the last 7 days with stats.
+    Use --graph for a full bar chart of all days.
     """
     config = load_config()
 
     if local:
         if output_only:
-            # Fast mode: only output tokens from stats-cache.json
             data = get_local_daily_stats(days)
-            render_daily_graph(data, f"Local Usage - Output Only (last {days} days)")
         else:
-            # Full mode: parse session files for complete breakdown
             data = get_daily_stats_from_sessions(days)
-            if data:
-                render_daily_graph(data, f"Local Usage - All Tokens (last {days} days)")
-            else:
+            if not data:
                 console.print("[yellow]No session data found[/yellow]")
+                return
+
+        if graph:
+            title = f"Local Usage - {'Output Only' if output_only else 'All Tokens'} (last {days} days)"
+            render_daily_graph(data, title)
+        else:
+            render_recent_table(data)
         return
 
     # Server mode: sync if needed, then fetch from server
@@ -261,14 +264,16 @@ def tokens(days: int, local: bool, output_only: bool):
 
     data = fetch_daily_stats(days)
     if data is None:
-        # Fall back to local session data
         console.print("[yellow]Using local data (server unavailable)[/yellow]")
         if not output_only:
             data = get_daily_stats_from_sessions(days)
         if not data:
             data = get_local_daily_stats(days)
 
-    render_daily_graph(data, f"Usage (last {days} days)")
+    if graph:
+        render_daily_graph(data, f"Usage (last {days} days)")
+    else:
+        render_recent_table(data)
 
 
 @cli.command()
