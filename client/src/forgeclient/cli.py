@@ -8,9 +8,9 @@ import click
 
 from .config import load_config, set_config_value, save_config
 from .sync import maybe_auto_sync, do_sync, fetch_daily_stats, test_connection
-from .claude_code import get_local_daily_stats
-from .local_cache import get_pending_count, list_pending, process_pending_syncs
-from .display import console, render_daily_graph, show_sync_status, show_stale_warning
+from .claude_code import get_local_daily_stats, get_local_model_usage, get_local_summary
+from .local_cache import get_pending_count, list_pending, process_pending_syncs, compute_daily_deltas, get_usage_snapshots
+from .display import console, render_daily_graph, show_sync_status, show_stale_warning, render_model_usage
 
 
 def setup_logging(verbose: bool):
@@ -229,14 +229,36 @@ def sync(force: bool, retry: bool, status: bool):
 @cli.command()
 @click.option('--days', '-d', default=30, help='Number of days to show')
 @click.option('--local', is_flag=True, help='Show local data only (no server)')
-def tokens(days: int, local: bool):
-    """Show daily token usage graph."""
+@click.option('--output-only', is_flag=True, help='Show only output tokens (exclude cache)')
+def tokens(days: int, local: bool, output_only: bool):
+    """Show daily token usage graph.
+
+    By default, shows all tokens including cache (when snapshot data available).
+    Use --output-only to show only input/output tokens without cache.
+    """
     config = load_config()
 
     if local:
-        # Local mode: read from stats-cache.json directly
-        data = get_local_daily_stats(days)
-        render_daily_graph(data, f"Local Usage (last {days} days)")
+        if output_only:
+            # Legacy mode: only output tokens from dailyModelTokens
+            data = get_local_daily_stats(days)
+            render_daily_graph(data, f"Local Usage - Output Only (last {days} days)")
+        else:
+            # Try to use computed deltas (includes cache)
+            data = compute_daily_deltas(days)
+            if data:
+                snapshots = get_usage_snapshots()
+                first_snapshot = min(snapshots.keys()) if snapshots else None
+                title = f"Local Usage - All Tokens (last {days} days)"
+                if first_snapshot:
+                    console.print(f"[dim]Cache tracking available from {first_snapshot}[/dim]")
+                render_daily_graph(data, title)
+            else:
+                # Fall back to basic stats (no cache breakdown)
+                console.print("[yellow]No snapshot data yet. Run 'forge sync' to start tracking cache tokens.[/yellow]")
+                console.print("[dim]Showing output tokens only (cache not available)[/dim]")
+                data = get_local_daily_stats(days)
+                render_daily_graph(data, f"Local Usage - Output Only (last {days} days)")
         return
 
     # Server mode: sync if needed, then fetch from server
@@ -248,18 +270,31 @@ def tokens(days: int, local: bool):
 
     data = fetch_daily_stats(days)
     if data is None:
-        # Fall back to local
+        # Fall back to local with cache if available
         console.print("[yellow]Using local data (server unavailable)[/yellow]")
-        data = get_local_daily_stats(days)
+        if not output_only:
+            data = compute_daily_deltas(days)
+        if not data:
+            data = get_local_daily_stats(days)
 
     render_daily_graph(data, f"Usage (last {days} days)")
 
 
 @cli.command()
-def stats():
-    """Show overall usage statistics."""
-    # Similar pattern: sync, fetch from server, display
-    console.print("[dim]Not yet implemented[/dim]")
+@click.option('--local', is_flag=True, help='Show local data only (no server)')
+def stats(local: bool):
+    """Show detailed token usage breakdown."""
+    if local:
+        model_usage = get_local_model_usage()
+        summary = get_local_summary()
+        render_model_usage(model_usage, summary)
+        return
+
+    # TODO: fetch from server when implemented
+    # For now, just show local data
+    model_usage = get_local_model_usage()
+    summary = get_local_summary()
+    render_model_usage(model_usage, summary)
 
 
 @cli.command()

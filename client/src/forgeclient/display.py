@@ -120,3 +120,73 @@ def show_stale_warning(config: dict):
         last_error = config.get("last_error", "unknown error")
         console.print(f"[yellow]⚠ Last sync failed: {last_error}[/yellow]")
         console.print("[dim]  Showing cached data. Run 'forge sync' to retry.[/dim]")
+
+
+def render_model_usage(model_usage: list[dict], summary: dict = None):
+    """Render detailed model usage breakdown."""
+    if not model_usage:
+        console.print("[yellow]No usage data available[/yellow]")
+        return
+
+    lines = []
+    lines.append("")
+    lines.append("  [bold cyan]Token Usage by Model[/bold cyan]")
+    lines.append(f"  [dim]{'─' * 60}[/dim]")
+
+    grand_total = 0
+    grand_input = 0
+    grand_output = 0
+    grand_cache_read = 0
+    grand_cache_create = 0
+
+    for usage in sorted(model_usage, key=lambda x: x.get("input_tokens", 0) + x.get("output_tokens", 0), reverse=True):
+        model = usage.get("model", "unknown")
+        input_tok = usage.get("input_tokens", 0)
+        output_tok = usage.get("output_tokens", 0)
+        cache_read = usage.get("cache_read_tokens", 0)
+        cache_create = usage.get("cache_creation_tokens", 0)
+
+        # Shorten model name for display
+        short_model = model.replace("claude-", "").replace("-20251101", "")
+
+        lines.append(f"")
+        lines.append(f"  [bold]{short_model}[/bold]")
+        lines.append(f"    Input:          {format_number(input_tok):>10}")
+        lines.append(f"    Output:         {format_number(output_tok):>10}")
+        lines.append(f"    Cache read:     {format_number(cache_read):>10}")
+        lines.append(f"    Cache create:   {format_number(cache_create):>10}")
+
+        subtotal = input_tok + output_tok
+        lines.append(f"    [dim]Subtotal:       {format_number(subtotal):>10}[/dim]")
+
+        grand_input += input_tok
+        grand_output += output_tok
+        grand_cache_read += cache_read
+        grand_cache_create += cache_create
+        grand_total += subtotal
+
+    lines.append("")
+    lines.append(f"  [dim]{'─' * 60}[/dim]")
+    lines.append(f"  [bold]Totals (all models)[/bold]")
+    lines.append(f"    Input:          {format_number(grand_input):>10}")
+    lines.append(f"    Output:         {format_number(grand_output):>10}")
+    lines.append(f"    Cache read:     {format_number(grand_cache_read):>10}  [dim](not billed)[/dim]")
+    lines.append(f"    Cache create:   {format_number(grand_cache_create):>10}")
+    lines.append(f"    [bold]Total:          {format_number(grand_total):>10}[/bold]  [dim](input + output)[/dim]")
+
+    # Include cache in "all tokens" total
+    all_tokens = grand_input + grand_output + grand_cache_read + grand_cache_create
+    lines.append(f"    [dim]All tokens:     {format_number(all_tokens):>10}  (including cache)[/dim]")
+
+    if summary:
+        lines.append("")
+        lines.append(f"  [dim]{'─' * 60}[/dim]")
+        if summary.get("total_messages"):
+            lines.append(f"  Messages: {summary['total_messages']:,}")
+        if summary.get("total_sessions"):
+            lines.append(f"  Sessions: {summary['total_sessions']:,}")
+        if summary.get("first_session_date"):
+            lines.append(f"  Since: {summary['first_session_date']}")
+
+    lines.append("")
+    console.print("\n".join(lines))

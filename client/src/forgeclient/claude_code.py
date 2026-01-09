@@ -93,6 +93,37 @@ def build_sync_payload(days: int = 365) -> dict:
     }
 
 
+def get_local_model_usage() -> list[dict]:
+    """Get cumulative model usage from local cache."""
+    stats = load_stats_cache()
+    if not stats:
+        return []
+
+    result = []
+    for model, usage in stats.get("modelUsage", {}).items():
+        result.append({
+            "model": model,
+            "input_tokens": usage.get("inputTokens", 0),
+            "output_tokens": usage.get("outputTokens", 0),
+            "cache_read_tokens": usage.get("cacheReadInputTokens", 0),
+            "cache_creation_tokens": usage.get("cacheCreationInputTokens", 0),
+        })
+    return result
+
+
+def get_local_summary() -> dict:
+    """Get summary stats from local cache."""
+    stats = load_stats_cache()
+    if not stats:
+        return {}
+
+    return {
+        "total_sessions": stats.get("totalSessions", 0),
+        "total_messages": stats.get("totalMessages", 0),
+        "first_session_date": stats.get("firstSessionDate"),
+    }
+
+
 def get_local_daily_stats(days: int = 30) -> list[dict]:
     """Get daily stats from local cache only (for --local mode)."""
     stats = load_stats_cache()

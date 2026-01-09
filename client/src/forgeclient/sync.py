@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 
 from .config import load_config, save_config
-from .local_cache import queue_sync, process_pending_syncs, save_server_data
-from .claude_code import build_sync_payload
+from .local_cache import queue_sync, process_pending_syncs, save_server_data, save_usage_snapshot
+from .claude_code import build_sync_payload, get_local_model_usage
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +83,10 @@ def do_sync(config: dict) -> SyncResult:
             "last_sync_success": True,
             "last_error": None
         })
+
+        # Snapshot current model usage for daily delta tracking
+        save_usage_snapshot(get_local_model_usage())
+
         return SyncResult(
             status="success",
             records_synced=result.get("records_upserted", 0)
