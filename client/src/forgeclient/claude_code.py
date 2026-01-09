@@ -130,10 +130,10 @@ def _get_daily_usage_from_sessions(days: int = 365) -> list[dict]:
     return [
         {
             "date": date,
-            "input_tokens": data["input_tokens"],
-            "output_tokens": data["output_tokens"],
-            "cache_read_tokens": data["cache_read_tokens"],
-            "cache_creation_tokens": data["cache_creation_tokens"],
+            "input_tokens": daily_data[date]["input_tokens"],
+            "output_tokens": daily_data[date]["output_tokens"],
+            "cache_read_tokens": daily_data[date]["cache_read_tokens"],
+            "cache_creation_tokens": daily_data[date]["cache_creation_tokens"],
         }
         for date in sorted(daily_data.keys())
     ]
