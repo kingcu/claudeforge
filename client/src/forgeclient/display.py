@@ -45,14 +45,6 @@ def _calculate_streak(data: list[dict]) -> int:
     return streak
 
 
-def _mini_sparkline(values: list[int], width: int = 7) -> str:
-    """Create a mini sparkline from values."""
-    if not values:
-        return ""
-    max_val = max(values) if max(values) > 0 else 1
-    return "".join(BAR_CHARS[min(8, int(v / max_val * 8))] for v in values[-width:])
-
-
 def render_recent_table(data: list[dict], days: int = 7):
     """Render a table of recent daily usage with stats."""
     if not data:
@@ -75,12 +67,11 @@ def render_recent_table(data: list[dict], days: int = 7):
     table.add_column("Tokens", justify="right")
     table.add_column("vs Avg", justify="right")
     table.add_column("Trend", justify="center")
-    table.add_column("Spark", justify="left")
 
     prev_total = None
     totals = [d.get("total_tokens", 0) for d in recent]
 
-    for i, day in enumerate(recent):
+    for day in recent:
         date_str = day["date"]
         total = day.get("total_tokens", 0)
 
@@ -120,10 +111,7 @@ def render_recent_table(data: list[dict], days: int = 7):
         else:
             trend = ""
 
-        # Mini sparkline showing position in week
-        spark = _mini_sparkline(totals[:i+1])
-
-        table.add_row(date_str[5:], dow, tokens_str, pct_str, trend, f"[green]{spark}[/green]")
+        table.add_row(date_str[5:], dow, tokens_str, pct_str, trend)
         prev_total = total
 
     console.print()
