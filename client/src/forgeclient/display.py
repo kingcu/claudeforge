@@ -8,14 +8,78 @@ console = Console()
 BAR_CHARS = " ▁▂▃▄▅▆▇█"
 GRAPH_HEIGHT = 12
 
+# Goal: 100 billion tokens by end of 2026
+YEARLY_GOAL = 100_000_000_000
+GOAL_YEAR = 2026
+
 
 def format_number(n: int) -> str:
     """Format number with K/M suffix."""
+    if n >= 1_000_000_000:
+        return f"{n / 1_000_000_000:.2f}B"
     if n >= 1_000_000:
         return f"{n / 1_000_000:.1f}M"
     if n >= 1_000:
         return f"{n / 1_000:.1f}K"
     return str(n)
+
+
+def _calculate_goal_progress(data: list[dict]) -> dict:
+    """Calculate progress toward yearly token goal."""
+    now = datetime.now()
+    year_start = datetime(GOAL_YEAR, 1, 1)
+    year_end = datetime(GOAL_YEAR, 12, 31, 23, 59, 59)
+
+    # Filter to current year only
+    year_str = str(GOAL_YEAR)
+    year_data = [d for d in data if d.get("date", "").startswith(year_str)]
+    year_total = sum(d.get("total_tokens", 0) for d in year_data)
+
+    # Days elapsed and remaining
+    if now.year < GOAL_YEAR:
+        days_elapsed = 0
+        days_remaining = 365
+    elif now.year > GOAL_YEAR:
+        days_elapsed = 365
+        days_remaining = 0
+    else:
+        days_elapsed = (now - year_start).days + 1
+        days_remaining = (year_end - now).days
+
+    # Expected progress (linear)
+    year_progress_pct = days_elapsed / 365
+    expected_tokens = int(YEARLY_GOAL * year_progress_pct)
+
+    # Actual vs expected
+    if expected_tokens > 0:
+        normalized_pct = (year_total / expected_tokens) * 100
+    else:
+        normalized_pct = 0
+
+    # Required daily rate to hit goal
+    tokens_remaining = YEARLY_GOAL - year_total
+    if days_remaining > 0:
+        required_daily = tokens_remaining / days_remaining
+    else:
+        required_daily = 0
+
+    # Actual daily average this year
+    if days_elapsed > 0:
+        actual_daily_avg = year_total / days_elapsed
+    else:
+        actual_daily_avg = 0
+
+    return {
+        "year_total": year_total,
+        "goal": YEARLY_GOAL,
+        "days_elapsed": days_elapsed,
+        "days_remaining": days_remaining,
+        "expected_tokens": expected_tokens,
+        "normalized_pct": normalized_pct,
+        "required_daily": required_daily,
+        "actual_daily_avg": actual_daily_avg,
+        "absolute_pct": (year_total / YEARLY_GOAL) * 100,
+    }
 
 
 def _calculate_streak(data: list[dict]) -> int:
@@ -121,6 +185,46 @@ def render_recent_table(data: list[dict], days: int = 7):
     total_recent = sum(totals)
     console.print()
     console.print(f"  [bold]Week total:[/bold] {format_number(total_recent)}  │  [bold]30d avg:[/bold] {format_number(int(avg_30d))}/day  │  [bold]Streak:[/bold] {streak} day{'s' if streak != 1 else ''} {'🔥' if streak >= 7 else ''}")
+
+    # Goal progress
+    goal = _calculate_goal_progress(data)
+    console.print()
+    console.print(f"  [bold cyan]2026 Goal: 100B tokens[/bold cyan]")
+    console.print(f"  [dim]{'─' * 50}[/dim]")
+
+    # Progress bar
+    bar_width = 40
+    filled = int((goal['absolute_pct'] / 100) * bar_width)
+    expected_marker = int((goal['days_elapsed'] / 365) * bar_width)
+    bar = ""
+    for i in range(bar_width):
+        if i < filled:
+            bar += "[green]█[/green]"
+        elif i == expected_marker:
+            bar += "[yellow]│[/yellow]"
+        else:
+            bar += "[dim]░[/dim]"
+
+    console.print(f"  {bar} {goal['absolute_pct']:.2f}%")
+
+    # Color the normalized progress
+    norm_pct = goal['normalized_pct']
+    if norm_pct >= 100:
+        norm_str = f"[bold green]{norm_pct:.0f}%[/bold green]"
+        status = "[green]ahead[/green]"
+    elif norm_pct >= 80:
+        norm_str = f"[green]{norm_pct:.0f}%[/green]"
+        status = "[green]on track[/green]"
+    elif norm_pct >= 50:
+        norm_str = f"[yellow]{norm_pct:.0f}%[/yellow]"
+        status = "[yellow]behind[/yellow]"
+    else:
+        norm_str = f"[red]{norm_pct:.0f}%[/red]"
+        status = "[red]way behind[/red]"
+
+    console.print(f"  [bold]Progress:[/bold] {format_number(goal['year_total'])} / 100B ({norm_str} of expected) - {status}")
+    console.print(f"  [bold]Required:[/bold] {format_number(int(goal['required_daily']))}/day for remaining {goal['days_remaining']} days")
+    console.print(f"  [bold]Current:[/bold]  {format_number(int(goal['actual_daily_avg']))}/day average")
     console.print()
 
 
