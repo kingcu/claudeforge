@@ -26,11 +26,13 @@ class DailyActivityRecord(BaseModel):
         return v
 
 
-class DailyTokensRecord(BaseModel):
-    """Per-day per-model token counts."""
+class DailyUsageRecord(BaseModel):
+    """Per-day token usage with full breakdown."""
     date: str
-    model: str = Field(min_length=1)
-    tokens: int = Field(ge=0)
+    input_tokens: int = Field(ge=0, default=0)
+    output_tokens: int = Field(ge=0, default=0)
+    cache_read_tokens: int = Field(ge=0, default=0)
+    cache_creation_tokens: int = Field(ge=0, default=0)
 
     @field_validator('date')
     @classmethod
@@ -56,7 +58,7 @@ class SyncRequest(BaseModel):
     protocol_version: int = Field(ge=1, le=PROTOCOL_VERSION)
     hostname: str = Field(min_length=1, max_length=255)
     daily_activity: list[DailyActivityRecord] = Field(default_factory=list, max_length=MAX_SYNC_DAYS)
-    daily_tokens: list[DailyTokensRecord] = Field(default_factory=list, max_length=MAX_SYNC_DAYS * 10)
+    daily_usage: list[DailyUsageRecord] = Field(default_factory=list, max_length=MAX_SYNC_DAYS)
     model_usage: list[ModelUsageRecord] = Field(default_factory=list)
 
 
@@ -78,6 +80,10 @@ class DailyStatsRecord(BaseModel):
     """Response record for daily stats."""
     date: str
     total_tokens: int
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_creation_tokens: int
     message_count: int
     session_count: int
     tool_call_count: int

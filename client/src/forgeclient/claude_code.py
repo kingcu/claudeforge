@@ -33,7 +33,7 @@ def get_hostname() -> str:
 
 def build_sync_payload(days: int = 365) -> dict:
     """
-    Build sync payload from stats-cache.json.
+    Build sync payload from session files and stats-cache.json.
 
     Args:
         days: Number of days of history to include (default: all within limit)
@@ -42,57 +42,101 @@ def build_sync_payload(days: int = 365) -> dict:
         Dict matching SyncRequest schema
     """
     stats = load_stats_cache()
-    if not stats:
-        return {
-            "protocol_version": PROTOCOL_VERSION,
-            "hostname": get_hostname(),
-            "daily_activity": [],
-            "daily_tokens": [],
-            "model_usage": []
-        }
-
     cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
 
-    # Parse daily activity (per-day, NOT per-model)
+    # Parse daily activity from stats-cache (per-day, NOT per-model)
     daily_activity = []
-    for entry in stats.get("dailyActivity", []):
-        if entry["date"] >= cutoff:
-            daily_activity.append({
-                "date": entry["date"],
-                "message_count": entry.get("messageCount", 0),
-                "session_count": entry.get("sessionCount", 0),
-                "tool_call_count": entry.get("toolCallCount", 0)
-            })
-
-    # Parse daily tokens (per-day per-model)
-    daily_tokens = []
-    for entry in stats.get("dailyModelTokens", []):
-        if entry["date"] >= cutoff:
-            for model, tokens in entry.get("tokensByModel", {}).items():
-                daily_tokens.append({
+    if stats:
+        for entry in stats.get("dailyActivity", []):
+            if entry["date"] >= cutoff:
+                daily_activity.append({
                     "date": entry["date"],
-                    "model": model,
-                    "tokens": tokens
+                    "message_count": entry.get("messageCount", 0),
+                    "session_count": entry.get("sessionCount", 0),
+                    "tool_call_count": entry.get("toolCallCount", 0)
                 })
 
-    # Parse cumulative model usage
+    # Parse daily usage from session files (full breakdown)
+    daily_usage = _get_daily_usage_from_sessions(days)
+
+    # Parse cumulative model usage from stats-cache
     model_usage = []
-    for model, usage in stats.get("modelUsage", {}).items():
-        model_usage.append({
-            "model": model,
-            "input_tokens": usage.get("inputTokens", 0),
-            "output_tokens": usage.get("outputTokens", 0),
-            "cache_read_tokens": usage.get("cacheReadInputTokens", 0),
-            "cache_creation_tokens": usage.get("cacheCreationInputTokens", 0)
-        })
+    if stats:
+        for model, usage in stats.get("modelUsage", {}).items():
+            model_usage.append({
+                "model": model,
+                "input_tokens": usage.get("inputTokens", 0),
+                "output_tokens": usage.get("outputTokens", 0),
+                "cache_read_tokens": usage.get("cacheReadInputTokens", 0),
+                "cache_creation_tokens": usage.get("cacheCreationInputTokens", 0)
+            })
 
     return {
         "protocol_version": PROTOCOL_VERSION,
         "hostname": get_hostname(),
         "daily_activity": daily_activity,
-        "daily_tokens": daily_tokens,
+        "daily_usage": daily_usage,
         "model_usage": model_usage
     }
+
+
+def _get_daily_usage_from_sessions(days: int = 365) -> list[dict]:
+    """Parse session files for daily usage with full token breakdown."""
+    if not CLAUDE_PROJECTS_PATH.exists():
+        return []
+
+    cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+
+    # Aggregate by date
+    daily_data = defaultdict(lambda: {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+    })
+
+    for jsonl_file in CLAUDE_PROJECTS_PATH.glob("*/*.jsonl"):
+        try:
+            with open(jsonl_file, 'r') as f:
+                for line in f:
+                    try:
+                        entry = json.loads(line)
+                        if entry.get("type") != "assistant":
+                            continue
+
+                        message = entry.get("message", {})
+                        usage = message.get("usage", {})
+                        if not usage:
+                            continue
+
+                        timestamp = entry.get("timestamp")
+                        if not timestamp:
+                            continue
+
+                        date = timestamp[:10]
+                        if date < cutoff:
+                            continue
+
+                        daily_data[date]["input_tokens"] += usage.get("input_tokens", 0)
+                        daily_data[date]["output_tokens"] += usage.get("output_tokens", 0)
+                        daily_data[date]["cache_read_tokens"] += usage.get("cache_read_input_tokens", 0)
+                        daily_data[date]["cache_creation_tokens"] += usage.get("cache_creation_input_tokens", 0)
+
+                    except json.JSONDecodeError:
+                        continue
+        except (IOError, OSError):
+            continue
+
+    return [
+        {
+            "date": date,
+            "input_tokens": data["input_tokens"],
+            "output_tokens": data["output_tokens"],
+            "cache_read_tokens": data["cache_read_tokens"],
+            "cache_creation_tokens": data["cache_creation_tokens"],
+        }
+        for date in sorted(daily_data.keys())
+    ]
 
 
 def get_local_model_usage() -> list[dict]:

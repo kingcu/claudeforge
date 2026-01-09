@@ -20,7 +20,7 @@ def test_daily_stats_with_data(client, api_key):
             "protocol_version": 1,
             "hostname": "test-machine",
             "daily_activity": [{"date": "2026-01-07", "message_count": 10, "session_count": 2, "tool_call_count": 5}],
-            "daily_tokens": [{"date": "2026-01-07", "model": "claude-opus", "tokens": 1000}],
+            "daily_usage": [{"date": "2026-01-07", "input_tokens": 400, "output_tokens": 600, "cache_read_tokens": 0, "cache_creation_tokens": 0}],
             "model_usage": []
         },
         headers={"X-API-Key": api_key}
@@ -38,6 +38,8 @@ def test_daily_stats_with_data(client, api_key):
     day = next((d for d in days if d["date"] == "2026-01-07"), None)
     if day:  # May not be in range depending on test date
         assert day["total_tokens"] == 1000
+        assert day["input_tokens"] == 400
+        assert day["output_tokens"] == 600
         assert day["message_count"] == 10
 
 
@@ -46,7 +48,7 @@ def test_machines_list(client, api_key):
     # Sync to register a machine
     client.post(
         "/v1/sync",
-        json={"protocol_version": 1, "hostname": "test-machine", "daily_activity": [], "daily_tokens": [], "model_usage": []},
+        json={"protocol_version": 1, "hostname": "test-machine", "daily_activity": [], "daily_usage": [], "model_usage": []},
         headers={"X-API-Key": api_key}
     )
 
@@ -61,7 +63,7 @@ def test_machine_soft_delete(client, api_key):
     # Register machine
     client.post(
         "/v1/sync",
-        json={"protocol_version": 1, "hostname": "to-delete", "daily_activity": [], "daily_tokens": [], "model_usage": []},
+        json={"protocol_version": 1, "hostname": "to-delete", "daily_activity": [], "daily_usage": [], "model_usage": []},
         headers={"X-API-Key": api_key}
     )
 

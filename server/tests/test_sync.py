@@ -11,7 +11,7 @@ def test_sync_creates_machine(client, api_key):
             "protocol_version": 1,
             "hostname": unique_hostname,
             "daily_activity": [],
-            "daily_tokens": [],
+            "daily_usage": [],
             "model_usage": []
         },
         headers={"X-API-Key": api_key}
@@ -28,7 +28,7 @@ def test_sync_idempotent(client, api_key):
         "protocol_version": 1,
         "hostname": "test-machine",
         "daily_activity": [{"date": "2026-01-07", "message_count": 10, "session_count": 1, "tool_call_count": 5}],
-        "daily_tokens": [{"date": "2026-01-07", "model": "claude-opus", "tokens": 1000}],
+        "daily_usage": [{"date": "2026-01-07", "input_tokens": 500, "output_tokens": 500, "cache_read_tokens": 0, "cache_creation_tokens": 0}],
         "model_usage": []
     }
 
@@ -56,7 +56,7 @@ def test_sync_rejects_wrong_key(client):
             "protocol_version": 1,
             "hostname": "test-machine",
             "daily_activity": [],
-            "daily_tokens": [],
+            "daily_usage": [],
             "model_usage": []
         },
         headers={"X-API-Key": "wrong-key"}

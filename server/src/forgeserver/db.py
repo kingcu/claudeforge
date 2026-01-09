@@ -39,16 +39,21 @@ CREATE TABLE IF NOT EXISTS daily_activity (
     CHECK(tool_call_count >= 0)
 );
 
-CREATE TABLE IF NOT EXISTS daily_tokens (
+CREATE TABLE IF NOT EXISTS daily_usage (
     id INTEGER PRIMARY KEY,
     hostname TEXT NOT NULL,
     date TEXT NOT NULL,
-    model TEXT NOT NULL,
-    tokens INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(hostname, date, model),
+    UNIQUE(hostname, date),
     FOREIGN KEY (hostname) REFERENCES machines(hostname) ON DELETE CASCADE,
-    CHECK(tokens >= 0)
+    CHECK(input_tokens >= 0),
+    CHECK(output_tokens >= 0),
+    CHECK(cache_read_tokens >= 0),
+    CHECK(cache_creation_tokens >= 0)
 );
 
 CREATE TABLE IF NOT EXISTS model_usage (
@@ -66,8 +71,8 @@ CREATE TABLE IF NOT EXISTS model_usage (
 
 CREATE INDEX IF NOT EXISTS idx_daily_activity_date ON daily_activity(date);
 CREATE INDEX IF NOT EXISTS idx_daily_activity_hostname ON daily_activity(hostname);
-CREATE INDEX IF NOT EXISTS idx_daily_tokens_date ON daily_tokens(date);
-CREATE INDEX IF NOT EXISTS idx_daily_tokens_hostname ON daily_tokens(hostname);
+CREATE INDEX IF NOT EXISTS idx_daily_usage_date ON daily_usage(date);
+CREATE INDEX IF NOT EXISTS idx_daily_usage_hostname ON daily_usage(hostname);
 CREATE INDEX IF NOT EXISTS idx_model_usage_hostname ON model_usage(hostname);
 """
 
@@ -138,16 +143,22 @@ def sync_usage(request: SyncRequest) -> tuple[int, bool]:
                   record.session_count, record.tool_call_count))
             count += 1
 
-        # Upsert daily tokens
-        for record in request.daily_tokens:
+        # Upsert daily usage (full token breakdown)
+        for record in request.daily_usage:
             conn.execute("""
-                INSERT INTO daily_tokens
-                    (hostname, date, model, tokens, updated_at)
-                VALUES (?, ?, ?, ?, datetime('now'))
-                ON CONFLICT(hostname, date, model) DO UPDATE SET
-                    tokens = excluded.tokens,
+                INSERT INTO daily_usage
+                    (hostname, date, input_tokens, output_tokens,
+                     cache_read_tokens, cache_creation_tokens, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+                ON CONFLICT(hostname, date) DO UPDATE SET
+                    input_tokens = excluded.input_tokens,
+                    output_tokens = excluded.output_tokens,
+                    cache_read_tokens = excluded.cache_read_tokens,
+                    cache_creation_tokens = excluded.cache_creation_tokens,
                     updated_at = datetime('now')
-            """, (request.hostname, record.date, record.model, record.tokens))
+            """, (request.hostname, record.date, record.input_tokens,
+                  record.output_tokens, record.cache_read_tokens,
+                  record.cache_creation_tokens))
             count += 1
 
         # Upsert model usage
@@ -176,20 +187,23 @@ def sync_usage(request: SyncRequest) -> tuple[int, bool]:
 def get_daily_stats(days: int = 30) -> list[DailyStatsRecord]:
     """Get aggregated daily stats for active machines."""
     with get_db() as conn:
-        # Query tokens aggregated by date
+        # Query usage aggregated by date (full breakdown)
         rows = conn.execute("""
             SELECT
-                dt.date,
-                SUM(dt.tokens) as total_tokens,
-                GROUP_CONCAT(DISTINCT dt.hostname) as machines
-            FROM daily_tokens dt
-            JOIN machines m ON dt.hostname = m.hostname AND m.is_active = 1
-            WHERE dt.date >= date('now', ?)
-            GROUP BY dt.date
-            ORDER BY dt.date ASC
+                du.date,
+                SUM(du.input_tokens) as input_tokens,
+                SUM(du.output_tokens) as output_tokens,
+                SUM(du.cache_read_tokens) as cache_read_tokens,
+                SUM(du.cache_creation_tokens) as cache_creation_tokens,
+                GROUP_CONCAT(DISTINCT du.hostname) as machines
+            FROM daily_usage du
+            JOIN machines m ON du.hostname = m.hostname AND m.is_active = 1
+            WHERE du.date >= date('now', ?)
+            GROUP BY du.date
+            ORDER BY du.date ASC
         """, (f'-{days} days',)).fetchall()
 
-        # Query activity aggregated by date (separate since it's not per-model)
+        # Query activity aggregated by date
         activity_rows = conn.execute("""
             SELECT
                 da.date,
@@ -208,7 +222,12 @@ def get_daily_stats(days: int = 30) -> list[DailyStatsRecord]:
         return [
             DailyStatsRecord(
                 date=row['date'],
-                total_tokens=row['total_tokens'],
+                total_tokens=(row['input_tokens'] + row['output_tokens'] +
+                              row['cache_read_tokens'] + row['cache_creation_tokens']),
+                input_tokens=row['input_tokens'],
+                output_tokens=row['output_tokens'],
+                cache_read_tokens=row['cache_read_tokens'],
+                cache_creation_tokens=row['cache_creation_tokens'],
                 message_count=activity_map.get(row['date'], {}).get('message_count', 0) or 0,
                 session_count=activity_map.get(row['date'], {}).get('session_count', 0) or 0,
                 tool_call_count=activity_map.get(row['date'], {}).get('tool_call_count', 0) or 0,
@@ -260,9 +279,10 @@ def get_totals() -> dict:
     """Get all-time totals."""
     with get_db() as conn:
         tokens = conn.execute("""
-            SELECT COALESCE(SUM(tokens), 0) as total
-            FROM daily_tokens dt
-            JOIN machines m ON dt.hostname = m.hostname AND m.is_active = 1
+            SELECT
+                COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0) as total
+            FROM daily_usage du
+            JOIN machines m ON du.hostname = m.hostname AND m.is_active = 1
         """).fetchone()['total']
 
         activity = conn.execute("""
@@ -279,8 +299,8 @@ def get_totals() -> dict:
 
         dates = conn.execute("""
             SELECT MIN(date) as first, MAX(date) as last
-            FROM daily_tokens dt
-            JOIN machines m ON dt.hostname = m.hostname AND m.is_active = 1
+            FROM daily_usage du
+            JOIN machines m ON du.hostname = m.hostname AND m.is_active = 1
         """).fetchone()
 
         return {
@@ -321,12 +341,14 @@ def get_machine_stats(hostname: str, days: int = 30) -> list[DailyStatsRecord]:
     with get_db() as conn:
         rows = conn.execute("""
             SELECT
-                dt.date,
-                SUM(dt.tokens) as total_tokens
-            FROM daily_tokens dt
-            WHERE dt.hostname = ? AND dt.date >= date('now', ?)
-            GROUP BY dt.date
-            ORDER BY dt.date ASC
+                du.date,
+                du.input_tokens,
+                du.output_tokens,
+                du.cache_read_tokens,
+                du.cache_creation_tokens
+            FROM daily_usage du
+            WHERE du.hostname = ? AND du.date >= date('now', ?)
+            ORDER BY du.date ASC
         """, (hostname, f'-{days} days')).fetchall()
 
         activity_rows = conn.execute("""
@@ -340,7 +362,12 @@ def get_machine_stats(hostname: str, days: int = 30) -> list[DailyStatsRecord]:
         return [
             DailyStatsRecord(
                 date=row['date'],
-                total_tokens=row['total_tokens'],
+                total_tokens=(row['input_tokens'] + row['output_tokens'] +
+                              row['cache_read_tokens'] + row['cache_creation_tokens']),
+                input_tokens=row['input_tokens'],
+                output_tokens=row['output_tokens'],
+                cache_read_tokens=row['cache_read_tokens'],
+                cache_creation_tokens=row['cache_creation_tokens'],
                 message_count=activity_map.get(row['date'], {}).get('message_count', 0) or 0,
                 session_count=activity_map.get(row['date'], {}).get('session_count', 0) or 0,
                 tool_call_count=activity_map.get(row['date'], {}).get('tool_call_count', 0) or 0,
