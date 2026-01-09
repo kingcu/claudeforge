@@ -2,29 +2,6 @@
 
 Centralized usage tracking for Claude Code across multiple machines.
 
-## Problem
-
-Claude Code stores usage stats locally in `~/.claude/stats-cache.json`. If you use Claude Code on multiple machines, there's no way to see aggregated usage across all of them.
-
-## Solution
-
-A client-server architecture where each machine syncs its local Claude Code stats to a central server.
-
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│ Work Laptop │     │ Home Desktop│     │ Other       │
-│ forge sync  │────▶│ forge sync  │────▶│ forge sync  │
-└─────────────┘     └─────────────┘     └─────────────┘
-       │                   │                   │
-       └───────────────────┴───────────────────┘
-                           │
-                           ▼
-                  ┌─────────────────┐
-                  │  Forge Server   │
-                  │  (FastAPI+SQLite)│
-                  └─────────────────┘
-```
-
 ## Quick Start
 
 ### 1. Start the server
@@ -41,42 +18,51 @@ docker compose up -d
 curl http://localhost:8420/health
 ```
 
-### 2. Install the client
+### 2. Install and configure the client
 
 ```bash
+# Install
 pip install -e ./client
+
+# Run interactive setup
+forge setup
 ```
 
-### 3. Configure the client
+The setup wizard will prompt for:
+- **Server URL**: Your forge server address (e.g., `http://192.168.1.100:8420`)
+- **API Key**: The `FORGE_API_KEY` from step 1
+- **Auto-sync hook**: Optionally install a Claude Code hook for automatic hourly syncing
+
+### 3. View your stats
 
 ```bash
-# Set server URL (use your server's address)
-forge config set server-url http://localhost:8420
-
-# Set API key (same as FORGE_API_KEY in .env)
-forge config set api-key YOUR_API_KEY
-
-# Verify config
-forge config show
-```
-
-### 4. Sync and view stats
-
-```bash
-# Sync local stats to server
-forge sync
-
 # View aggregated usage graph
 forge tokens
 
-# View local-only stats (no server)
+# View local-only stats (no server needed)
 forge tokens --local
+```
+
+## Automatic Syncing
+
+The `forge setup` command can install a Claude Code hook that automatically syncs your usage data. When enabled:
+
+- Runs on every Claude prompt
+- Only syncs if last sync was more than 1 hour ago
+- Queues syncs for retry if server is unreachable
+- Runs silently in the background
+
+You can also manually trigger a sync anytime:
+
+```bash
+forge sync
 ```
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
+| `forge setup` | Interactive setup wizard |
 | `forge sync` | Sync local stats to server |
 | `forge sync --force` | Force sync even if recently synced |
 | `forge sync --status` | Show pending sync count |
@@ -86,6 +72,27 @@ forge tokens --local
 | `forge tokens -d 7` | Show last 7 days |
 | `forge config show` | Show current config |
 | `forge config set <key> <value>` | Set config value |
+
+---
+
+## How It Works
+
+Claude Code stores usage stats locally in `~/.claude/stats-cache.json`. Claudeforge syncs this data to a central server so you can view aggregated usage across all your machines.
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│ Work Laptop │     │ Home Desktop│     │ Other       │
+│ forge sync  │────▶│ forge sync  │────▶│ forge sync  │
+└─────────────┘     └─────────────┘     └─────────────┘
+       │                   │                   │
+       └───────────────────┴───────────────────┘
+                           │
+                           ▼
+                  ┌─────────────────┐
+                  │  Forge Server   │
+                  │  (FastAPI+SQLite)│
+                  └─────────────────┘
+```
 
 ## Configuration
 
@@ -102,6 +109,14 @@ Client config is stored in `~/.claudeforge/config.json`:
 - `server_url`: URL of your forge server
 - `api_key`: API key for authentication
 - `hostname`: Override machine hostname (default: auto-detected)
+
+You can edit this directly or use `forge config set`:
+
+```bash
+forge config set server-url http://localhost:8420
+forge config set api-key YOUR_API_KEY
+forge config set hostname my-machine
+```
 
 ## Server API
 

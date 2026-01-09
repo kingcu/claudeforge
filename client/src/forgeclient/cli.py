@@ -1,10 +1,13 @@
 """Command-line interface for forge."""
+import json
 import logging
 import sys
+from pathlib import Path
+
 import click
 
-from .config import load_config, set_config_value
-from .sync import maybe_auto_sync, do_sync, fetch_daily_stats
+from .config import load_config, set_config_value, save_config
+from .sync import maybe_auto_sync, do_sync, fetch_daily_stats, test_connection
 from .claude_code import get_local_daily_stats
 from .local_cache import get_pending_count, list_pending, process_pending_syncs
 from .display import console, render_daily_graph, show_sync_status, show_stale_warning
@@ -57,6 +60,136 @@ def config_set(key: str, value: str):
     }
     set_config_value(key_map[key], value)
     console.print(f"[green]Set {key}[/green]")
+
+
+# === Setup command ===
+
+CLAUDE_SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
+FORGE_HOOK = {
+    "type": "command",
+    "command": "forge sync 2>/dev/null || true"
+}
+
+
+def is_hook_installed() -> bool:
+    """Check if the forge sync hook is already installed."""
+    if not CLAUDE_SETTINGS_PATH.exists():
+        return False
+    try:
+        settings = json.loads(CLAUDE_SETTINGS_PATH.read_text())
+        hooks = settings.get("hooks", {}).get("UserPromptSubmit", [])
+        for matcher in hooks:
+            for hook in matcher.get("hooks", []):
+                if hook.get("command", "").startswith("forge sync"):
+                    return True
+    except (json.JSONDecodeError, IOError):
+        pass
+    return False
+
+
+def install_hook() -> bool:
+    """Install the forge sync hook into Claude settings. Returns success."""
+    try:
+        # Load existing settings or create new
+        if CLAUDE_SETTINGS_PATH.exists():
+            settings = json.loads(CLAUDE_SETTINGS_PATH.read_text())
+        else:
+            settings = {}
+
+        # Ensure hooks structure exists
+        if "hooks" not in settings:
+            settings["hooks"] = {}
+        if "UserPromptSubmit" not in settings["hooks"]:
+            settings["hooks"]["UserPromptSubmit"] = []
+
+        # Find or create the catch-all matcher
+        matchers = settings["hooks"]["UserPromptSubmit"]
+        catch_all = None
+        for matcher in matchers:
+            if matcher.get("matcher") == "":
+                catch_all = matcher
+                break
+
+        if catch_all is None:
+            catch_all = {"matcher": "", "hooks": []}
+            matchers.append(catch_all)
+
+        # Add our hook if not already present
+        if "hooks" not in catch_all:
+            catch_all["hooks"] = []
+
+        for hook in catch_all["hooks"]:
+            if hook.get("command", "").startswith("forge sync"):
+                return True  # Already installed
+
+        catch_all["hooks"].append(FORGE_HOOK)
+
+        # Write back
+        CLAUDE_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CLAUDE_SETTINGS_PATH.write_text(json.dumps(settings, indent=2))
+        return True
+    except Exception:
+        return False
+
+
+@cli.command()
+def setup():
+    """Interactive setup wizard."""
+    console.print("[bold]Forge Setup[/bold]\n")
+
+    config = load_config()
+
+    # Prompt for server URL with existing value as default
+    default_url = config.get("server_url") or "http://localhost:8420"
+    server_url = click.prompt("Server URL", default=default_url)
+
+    # Prompt for API key, allowing reuse of existing
+    existing_key = config.get("api_key")
+    if existing_key:
+        masked = existing_key[:8] + "..." if len(existing_key) > 8 else "***"
+        api_key = click.prompt(
+            f"API Key [enter to keep {masked}]",
+            default="",
+            hide_input=True,
+            show_default=False
+        )
+        if not api_key:
+            api_key = existing_key
+    else:
+        api_key = click.prompt("API Key", hide_input=True)
+
+    # Test connection
+    console.print("\nTesting connection...", end=" ")
+    success, message = test_connection(server_url, api_key)
+
+    if success:
+        console.print("[green]OK[/green]")
+        config["server_url"] = server_url
+        config["api_key"] = api_key
+        save_config(config)
+        console.print("[green]Configuration saved![/green]")
+    else:
+        console.print(f"[red]Failed[/red]")
+        console.print(f"[red]{message}[/red]")
+        if click.confirm("\nSave anyway?", default=False):
+            config["server_url"] = server_url
+            config["api_key"] = api_key
+            save_config(config)
+            console.print("[yellow]Configuration saved (connection not verified)[/yellow]")
+        else:
+            return  # Don't offer hook installation if config not saved
+
+    # Offer to install Claude hook
+    console.print()
+    if is_hook_installed():
+        console.print("[dim]Auto-sync hook already installed[/dim]")
+    elif click.confirm("Install Claude hook for automatic hourly sync?", default=True):
+        if install_hook():
+            console.print("[green]Hook installed![/green]")
+            console.print("[dim]Forge will sync automatically on each Claude prompt (max once per hour)[/dim]")
+        else:
+            console.print("[red]Failed to install hook[/red]")
+            console.print(f"[dim]You can manually add it to {CLAUDE_SETTINGS_PATH}[/dim]")
 
 
 # === Sync commands ===

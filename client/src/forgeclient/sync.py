@@ -102,6 +102,26 @@ def do_sync(config: dict) -> SyncResult:
         return SyncResult(status="error", message=f"Server error: {e.response.status_code}")
 
 
+def test_connection(server_url: str, api_key: str) -> tuple[bool, str]:
+    """Test server connection and auth. Returns (success, message)."""
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            response = client.get(
+                f"{server_url}/v1/stats/machines",
+                headers={"X-API-Key": api_key}
+            )
+            response.raise_for_status()
+            return True, "Connected"
+    except httpx.ConnectError:
+        return False, "Could not connect to server"
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401:
+            return False, "Invalid API key"
+        return False, f"Server error: {e.response.status_code}"
+    except Exception as e:
+        return False, str(e)
+
+
 def fetch_daily_stats(days: int = 30) -> list[dict] | None:
     """Fetch daily stats from server. Returns None on failure."""
     config = load_config()
