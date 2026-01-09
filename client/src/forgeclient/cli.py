@@ -8,7 +8,7 @@ import click
 
 from .config import load_config, set_config_value, save_config
 from .sync import maybe_auto_sync, do_sync, fetch_daily_stats, test_connection
-from .claude_code import get_local_daily_stats, get_local_model_usage, get_local_summary
+from .claude_code import get_local_daily_stats, get_local_model_usage, get_local_summary, get_daily_stats_from_sessions
 from .local_cache import get_pending_count, list_pending, process_pending_syncs, compute_daily_deltas, get_usage_snapshots
 from .display import console, render_daily_graph, show_sync_status, show_stale_warning, render_model_usage
 
@@ -233,32 +233,23 @@ def sync(force: bool, retry: bool, status: bool):
 def tokens(days: int, local: bool, output_only: bool):
     """Show daily token usage graph.
 
-    By default, shows all tokens including cache (when snapshot data available).
-    Use --output-only to show only input/output tokens without cache.
+    By default, shows all tokens including cache by parsing session files.
+    Use --output-only to show only output tokens (faster, uses stats-cache.json).
     """
     config = load_config()
 
     if local:
         if output_only:
-            # Legacy mode: only output tokens from dailyModelTokens
+            # Fast mode: only output tokens from stats-cache.json
             data = get_local_daily_stats(days)
             render_daily_graph(data, f"Local Usage - Output Only (last {days} days)")
         else:
-            # Try to use computed deltas (includes cache)
-            data = compute_daily_deltas(days)
+            # Full mode: parse session files for complete breakdown
+            data = get_daily_stats_from_sessions(days)
             if data:
-                snapshots = get_usage_snapshots()
-                first_snapshot = min(snapshots.keys()) if snapshots else None
-                title = f"Local Usage - All Tokens (last {days} days)"
-                if first_snapshot:
-                    console.print(f"[dim]Cache tracking available from {first_snapshot}[/dim]")
-                render_daily_graph(data, title)
+                render_daily_graph(data, f"Local Usage - All Tokens (last {days} days)")
             else:
-                # Fall back to basic stats (no cache breakdown)
-                console.print("[yellow]No snapshot data yet. Run 'forge sync' to start tracking cache tokens.[/yellow]")
-                console.print("[dim]Showing output tokens only (cache not available)[/dim]")
-                data = get_local_daily_stats(days)
-                render_daily_graph(data, f"Local Usage - Output Only (last {days} days)")
+                console.print("[yellow]No session data found[/yellow]")
         return
 
     # Server mode: sync if needed, then fetch from server
@@ -270,10 +261,10 @@ def tokens(days: int, local: bool, output_only: bool):
 
     data = fetch_daily_stats(days)
     if data is None:
-        # Fall back to local with cache if available
+        # Fall back to local session data
         console.print("[yellow]Using local data (server unavailable)[/yellow]")
         if not output_only:
-            data = compute_daily_deltas(days)
+            data = get_daily_stats_from_sessions(days)
         if not data:
             data = get_local_daily_stats(days)
 

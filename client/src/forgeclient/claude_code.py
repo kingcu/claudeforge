@@ -1,13 +1,15 @@
-"""Parse Claude Code's stats-cache.json and build sync payloads."""
+"""Parse Claude Code's stats-cache.json and session files."""
 import json
 import socket
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional
+from collections import defaultdict
 
 from .config import load_config
 
 STATS_CACHE_PATH = Path.home() / ".claude" / "stats-cache.json"
+CLAUDE_PROJECTS_PATH = Path.home() / ".claude" / "projects"
 PROTOCOL_VERSION = 1
 
 
@@ -125,7 +127,11 @@ def get_local_summary() -> dict:
 
 
 def get_local_daily_stats(days: int = 30) -> list[dict]:
-    """Get daily stats from local cache only (for --local mode)."""
+    """Get daily stats from local cache only (for --local mode).
+
+    This uses stats-cache.json which only has output tokens, not cache breakdown.
+    For full breakdown, use get_daily_stats_from_sessions().
+    """
     stats = load_stats_cache()
     if not stats:
         return []
@@ -154,6 +160,86 @@ def get_local_daily_stats(days: int = 30) -> list[dict]:
             "message_count": activity.get("messageCount", 0),
             "session_count": activity.get("sessionCount", 0),
             "tool_call_count": activity.get("toolCallCount", 0),
+            "machines": [get_hostname()]
+        })
+
+    return result
+
+
+def get_daily_stats_from_sessions(days: int = 30) -> list[dict]:
+    """Parse session JSONL files to get daily stats with full token breakdown.
+
+    This reads the actual session files which contain per-message usage data
+    including input_tokens, output_tokens, cache_read_input_tokens, and
+    cache_creation_input_tokens.
+    """
+    if not CLAUDE_PROJECTS_PATH.exists():
+        return []
+
+    cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+
+    # Aggregate by date
+    daily_data = defaultdict(lambda: {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "message_count": 0,
+    })
+
+    # Find all session JSONL files
+    for jsonl_file in CLAUDE_PROJECTS_PATH.glob("*/*.jsonl"):
+        try:
+            with open(jsonl_file, 'r') as f:
+                for line in f:
+                    try:
+                        entry = json.loads(line)
+
+                        # Only process assistant messages with usage data
+                        if entry.get("type") != "assistant":
+                            continue
+
+                        message = entry.get("message", {})
+                        usage = message.get("usage", {})
+                        if not usage:
+                            continue
+
+                        # Get date from timestamp
+                        timestamp = entry.get("timestamp")
+                        if not timestamp:
+                            continue
+
+                        # Parse ISO timestamp and get date
+                        date = timestamp[:10]  # YYYY-MM-DD
+                        if date < cutoff:
+                            continue
+
+                        # Accumulate tokens
+                        daily_data[date]["input_tokens"] += usage.get("input_tokens", 0)
+                        daily_data[date]["output_tokens"] += usage.get("output_tokens", 0)
+                        daily_data[date]["cache_read_tokens"] += usage.get("cache_read_input_tokens", 0)
+                        daily_data[date]["cache_creation_tokens"] += usage.get("cache_creation_input_tokens", 0)
+                        daily_data[date]["message_count"] += 1
+
+                    except json.JSONDecodeError:
+                        continue
+        except (IOError, OSError):
+            continue
+
+    # Convert to list sorted by date
+    result = []
+    for date in sorted(daily_data.keys()):
+        data = daily_data[date]
+        total = (data["input_tokens"] + data["output_tokens"] +
+                 data["cache_read_tokens"] + data["cache_creation_tokens"])
+        result.append({
+            "date": date,
+            "total_tokens": total,
+            "input_tokens": data["input_tokens"],
+            "output_tokens": data["output_tokens"],
+            "cache_read_tokens": data["cache_read_tokens"],
+            "cache_creation_tokens": data["cache_creation_tokens"],
+            "message_count": data["message_count"],
             "machines": [get_hostname()]
         })
 
