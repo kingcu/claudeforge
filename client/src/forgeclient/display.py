@@ -222,9 +222,11 @@ def render_recent_table(data: list[dict], days: int = 7):
         norm_str = f"[red]{norm_pct:.0f}%[/red]"
         status = "[red]way behind[/red]"
 
-    console.print(f"  [bold]Progress:[/bold] {format_number(goal['year_total'])} / 100B ({norm_str} of expected) - {status}")
-    console.print(f"  [bold]Required:[/bold] {format_number(int(goal['required_daily']))}/day for remaining {goal['days_remaining']} days")
-    console.print(f"  [bold]Current:[/bold]  {format_number(int(goal['actual_daily_avg']))}/day average")
+    console.print(f"  [bold]Year total:[/bold] {format_number(goal['year_total'])} of 100B ({goal['absolute_pct']:.2f}%)")
+    console.print(f"  [bold]Expected:[/bold]  {format_number(goal['expected_tokens'])} by today (day {goal['days_elapsed']}/365)")
+    console.print(f"  [bold]Status:[/bold]    {norm_str} of expected - {status}")
+    console.print(f"  [bold]Required:[/bold]  {format_number(int(goal['required_daily']))}/day for remaining {goal['days_remaining']} days")
+    console.print(f"  [bold]Current:[/bold]   {format_number(int(goal['actual_daily_avg']))}/day average")
     console.print()
 
 
