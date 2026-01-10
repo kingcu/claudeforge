@@ -288,3 +288,101 @@ def get_daily_stats_from_sessions(days: int = 30) -> list[dict]:
         })
 
     return result
+
+
+def get_model_usage_from_sessions() -> list[dict]:
+    """Parse session JSONL files to get model usage with full token breakdown.
+
+    This reads the actual session files which contain per-message usage data,
+    aggregated by model. More accurate than stats-cache.json which may be stale.
+    """
+    if not CLAUDE_PROJECTS_PATH.exists():
+        return []
+
+    # Aggregate by model
+    model_data = defaultdict(lambda: {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "message_count": 0,
+    })
+
+    # Find all session JSONL files
+    for jsonl_file in CLAUDE_PROJECTS_PATH.glob("*/*.jsonl"):
+        try:
+            with open(jsonl_file, 'r') as f:
+                for line in f:
+                    try:
+                        entry = json.loads(line)
+
+                        # Only process assistant messages with usage data
+                        if entry.get("type") != "assistant":
+                            continue
+
+                        message = entry.get("message", {})
+                        usage = message.get("usage", {})
+                        if not usage:
+                            continue
+
+                        # Get model from message
+                        model = message.get("model", "unknown")
+
+                        # Accumulate tokens
+                        model_data[model]["input_tokens"] += usage.get("input_tokens", 0)
+                        model_data[model]["output_tokens"] += usage.get("output_tokens", 0)
+                        model_data[model]["cache_read_tokens"] += usage.get("cache_read_input_tokens", 0)
+                        model_data[model]["cache_creation_tokens"] += usage.get("cache_creation_input_tokens", 0)
+                        model_data[model]["message_count"] += 1
+
+                    except json.JSONDecodeError:
+                        continue
+        except (IOError, OSError):
+            continue
+
+    # Convert to list
+    return [
+        {
+            "model": model,
+            "input_tokens": data["input_tokens"],
+            "output_tokens": data["output_tokens"],
+            "cache_read_tokens": data["cache_read_tokens"],
+            "cache_creation_tokens": data["cache_creation_tokens"],
+        }
+        for model, data in sorted(model_data.items())
+    ]
+
+
+def get_summary_from_sessions() -> dict:
+    """Get summary stats from session files."""
+    if not CLAUDE_PROJECTS_PATH.exists():
+        return {}
+
+    total_messages = 0
+    total_sessions = 0
+    first_date = None
+
+    for jsonl_file in CLAUDE_PROJECTS_PATH.glob("*/*.jsonl"):
+        total_sessions += 1
+        try:
+            with open(jsonl_file, 'r') as f:
+                for line in f:
+                    try:
+                        entry = json.loads(line)
+                        if entry.get("type") == "assistant":
+                            total_messages += 1
+                            timestamp = entry.get("timestamp")
+                            if timestamp:
+                                date = timestamp[:10]
+                                if first_date is None or date < first_date:
+                                    first_date = date
+                    except json.JSONDecodeError:
+                        continue
+        except (IOError, OSError):
+            continue
+
+    return {
+        "total_sessions": total_sessions,
+        "total_messages": total_messages,
+        "first_session_date": first_date,
+    }

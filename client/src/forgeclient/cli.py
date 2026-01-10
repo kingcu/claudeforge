@@ -8,7 +8,7 @@ import click
 
 from .config import load_config, set_config_value, save_config
 from .sync import maybe_auto_sync, do_sync, fetch_daily_stats, test_connection
-from .claude_code import get_local_daily_stats, get_local_model_usage, get_local_summary, get_daily_stats_from_sessions
+from .claude_code import get_local_daily_stats, get_local_model_usage, get_local_summary, get_daily_stats_from_sessions, get_model_usage_from_sessions, get_summary_from_sessions
 from .local_cache import get_pending_count, list_pending, process_pending_syncs, compute_daily_deltas, get_usage_snapshots
 from .display import console, render_daily_graph, render_recent_table, show_sync_status, show_stale_warning, render_model_usage
 
@@ -268,19 +268,11 @@ def tokens(days: int, local: bool, output_only: bool):
 
 
 @cli.command()
-@click.option('--local', is_flag=True, help='Show local data only (no server)')
-def stats(local: bool):
-    """Show detailed token usage breakdown."""
-    if local:
-        model_usage = get_local_model_usage()
-        summary = get_local_summary()
-        render_model_usage(model_usage, summary)
-        return
-
-    # TODO: fetch from server when implemented
-    # For now, just show local data
-    model_usage = get_local_model_usage()
-    summary = get_local_summary()
+def stats():
+    """Show detailed token usage breakdown from session files."""
+    # Always use session files for accurate, up-to-date data
+    model_usage = get_model_usage_from_sessions()
+    summary = get_summary_from_sessions()
     render_model_usage(model_usage, summary)
 
 
