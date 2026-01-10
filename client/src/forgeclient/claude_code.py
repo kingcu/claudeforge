@@ -33,7 +33,7 @@ def get_hostname() -> str:
 
 def build_sync_payload(days: int = 365) -> dict:
     """
-    Build sync payload from session files and stats-cache.json.
+    Build sync payload from session files.
 
     Args:
         days: Number of days of history to include (default: all within limit)
@@ -45,6 +45,7 @@ def build_sync_payload(days: int = 365) -> dict:
     cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
 
     # Parse daily activity from stats-cache (per-day, NOT per-model)
+    # Note: This is the only thing we still use stats-cache for
     daily_activity = []
     if stats:
         for entry in stats.get("dailyActivity", []):
@@ -59,17 +60,8 @@ def build_sync_payload(days: int = 365) -> dict:
     # Parse daily usage from session files (full breakdown)
     daily_usage = _get_daily_usage_from_sessions(days)
 
-    # Parse cumulative model usage from stats-cache
-    model_usage = []
-    if stats:
-        for model, usage in stats.get("modelUsage", {}).items():
-            model_usage.append({
-                "model": model,
-                "input_tokens": usage.get("inputTokens", 0),
-                "output_tokens": usage.get("outputTokens", 0),
-                "cache_read_tokens": usage.get("cacheReadInputTokens", 0),
-                "cache_creation_tokens": usage.get("cacheCreationInputTokens", 0)
-            })
+    # Parse model usage from session files (NOT stats-cache which is stale)
+    model_usage = get_model_usage_from_sessions()
 
     return {
         "protocol_version": PROTOCOL_VERSION,
