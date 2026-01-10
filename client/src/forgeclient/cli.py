@@ -8,7 +8,7 @@ import click
 
 from .config import load_config, set_config_value, save_config
 from .sync import maybe_auto_sync, do_sync, fetch_daily_stats, fetch_model_stats, fetch_totals, test_connection
-from .claude_code import get_local_daily_stats, get_local_model_usage, get_local_summary, get_daily_stats_from_sessions, get_model_usage_from_sessions, get_summary_from_sessions
+from .claude_code import get_local_daily_stats, get_daily_stats_from_sessions, get_model_usage_from_sessions, get_summary_from_sessions
 from .local_cache import get_pending_count, list_pending, process_pending_syncs, compute_daily_deltas, get_usage_snapshots
 from .display import console, render_daily_graph, render_recent_table, show_sync_status, show_stale_warning, render_model_usage
 
@@ -224,28 +224,33 @@ def sync(force: bool, retry: bool, status: bool):
     show_sync_status(result, get_pending_count())
 
 
-# === Stats commands ===
+# === Stats command ===
 
 @cli.command()
 @click.option('--days', '-d', default=30, help='Number of days of history to fetch')
 @click.option('--local', is_flag=True, help='Show local data only (no server)')
-@click.option('--output-only', is_flag=True, help='Show only output tokens (exclude cache)')
-def tokens(days: int, local: bool, output_only: bool):
-    """Show daily token usage with graph and table."""
+def stats(days: int, local: bool):
+    """Show usage statistics: model breakdown, costs, daily graph, and goal progress."""
     config = load_config()
 
     if local:
-        if output_only:
-            data = get_local_daily_stats(days)
-        else:
-            data = get_daily_stats_from_sessions(days)
-            if not data:
-                console.print("[yellow]No session data found[/yellow]")
-                return
+        # Local mode - read from session files directly
+        model_usage = get_model_usage_from_sessions()
+        summary = get_summary_from_sessions()
+        daily_data = get_daily_stats_from_sessions(days)
+        if not daily_data:
+            console.print("[yellow]No session data found[/yellow]")
+            return
 
-        title = f"Local Usage - {'Output Only' if output_only else 'All Tokens'} (last {days} days)"
-        render_daily_graph(data, title)
-        render_recent_table(data)
+        # Get last 7 days for weekly cost
+        weekly_data = daily_data[-7:] if len(daily_data) >= 7 else daily_data
+
+        # Model usage and costs first
+        render_model_usage(model_usage, summary, weekly_data)
+
+        # Then graphs and tables
+        render_daily_graph(daily_data, f"Local Usage (last {days} days)")
+        render_recent_table(daily_data)
         return
 
     # Server mode: sync if needed, then fetch from server
@@ -255,39 +260,19 @@ def tokens(days: int, local: bool, output_only: bool):
     if not config.get("last_sync_success", True):
         show_stale_warning(config)
 
-    data = fetch_daily_stats(days)
-    if data is None:
-        console.print("[yellow]Using local data (server unavailable)[/yellow]")
-        if not output_only:
-            data = get_daily_stats_from_sessions(days)
-        if not data:
-            data = get_local_daily_stats(days)
-
-    render_daily_graph(data, f"Usage (last {days} days)")
-    render_recent_table(data)
-
-
-@cli.command()
-@click.option('--local', is_flag=True, help='Show local data only (no server)')
-def stats(local: bool):
-    """Show detailed token usage breakdown."""
-    if local:
-        model_usage = get_model_usage_from_sessions()
-        summary = get_summary_from_sessions()
-        render_model_usage(model_usage, summary)
-        return
-
-    # Sync first, then fetch from server
-    result = maybe_auto_sync()
-    show_sync_status(result, get_pending_count())
-
+    # Fetch all data from server
     model_usage = fetch_model_stats()
     totals = fetch_totals()
+    daily_data = fetch_daily_stats(days)
 
-    if model_usage is None:
+    # Fall back to local if server unavailable
+    if model_usage is None or daily_data is None:
         console.print("[yellow]Using local data (server unavailable)[/yellow]")
         model_usage = get_model_usage_from_sessions()
         summary = get_summary_from_sessions()
+        daily_data = get_daily_stats_from_sessions(days)
+        if not daily_data:
+            daily_data = get_local_daily_stats(days)
     else:
         summary = {
             "total_messages": totals.get("total_messages", 0) if totals else 0,
@@ -295,13 +280,15 @@ def stats(local: bool):
             "first_session_date": totals.get("first_activity") if totals else None,
         }
 
-    render_model_usage(model_usage, summary)
+    # Get last 7 days for weekly cost
+    weekly_data = daily_data[-7:] if len(daily_data) >= 7 else daily_data
 
+    # Model usage and costs first
+    render_model_usage(model_usage, summary, weekly_data)
 
-@cli.command()
-def models():
-    """Show usage breakdown by model."""
-    console.print("[dim]Not yet implemented[/dim]")
+    # Then graphs and tables
+    render_daily_graph(daily_data, f"Usage (last {days} days)")
+    render_recent_table(daily_data)
 
 
 @cli.command()

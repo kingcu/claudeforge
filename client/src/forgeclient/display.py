@@ -336,11 +336,43 @@ def show_stale_warning(config: dict):
         console.print("[dim]  Showing cached data. Run 'forge sync' to retry.[/dim]")
 
 
-def render_model_usage(model_usage: list[dict], summary: dict = None):
-    """Render detailed model usage breakdown."""
+def _estimate_cost(model: str, input_tok: int, output_tok: int, cache_read: int, cache_create: int) -> float:
+    """Estimate cost in USD based on model pricing (approximate)."""
+    # Pricing per million tokens (approximate as of 2024)
+    pricing = {
+        "opus": {"input": 15.0, "output": 75.0, "cache_read": 1.5, "cache_create": 18.75},
+        "sonnet": {"input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_create": 3.75},
+        "haiku": {"input": 0.25, "output": 1.25, "cache_read": 0.025, "cache_create": 0.3},
+    }
+
+    # Determine model tier
+    model_lower = model.lower()
+    if "opus" in model_lower:
+        p = pricing["opus"]
+    elif "sonnet" in model_lower:
+        p = pricing["sonnet"]
+    elif "haiku" in model_lower:
+        p = pricing["haiku"]
+    else:
+        return 0.0
+
+    cost = (
+        (input_tok / 1_000_000) * p["input"] +
+        (output_tok / 1_000_000) * p["output"] +
+        (cache_read / 1_000_000) * p["cache_read"] +
+        (cache_create / 1_000_000) * p["cache_create"]
+    )
+    return cost
+
+
+def render_model_usage(model_usage: list[dict], summary: dict = None, weekly_data: list[dict] = None):
+    """Render detailed model usage breakdown with costs."""
     if not model_usage:
         console.print("[yellow]No usage data available[/yellow]")
         return
+
+    # Filter out synthetic/unknown models
+    model_usage = [m for m in model_usage if m.get("model", "").startswith("claude-")]
 
     lines = []
     lines.append("")
@@ -352,16 +384,20 @@ def render_model_usage(model_usage: list[dict], summary: dict = None):
     grand_output = 0
     grand_cache_read = 0
     grand_cache_create = 0
+    grand_cost = 0.0
 
-    for usage in sorted(model_usage, key=lambda x: x.get("input_tokens", 0) + x.get("output_tokens", 0), reverse=True):
+    for usage in sorted(model_usage, key=lambda x: x.get("total_tokens", 0), reverse=True):
         model = usage.get("model", "unknown")
         input_tok = usage.get("input_tokens", 0)
         output_tok = usage.get("output_tokens", 0)
         cache_read = usage.get("cache_read_tokens", 0)
         cache_create = usage.get("cache_creation_tokens", 0)
 
+        # Calculate cost
+        cost = _estimate_cost(model, input_tok, output_tok, cache_read, cache_create)
+
         # Shorten model name for display
-        short_model = model.replace("claude-", "").replace("-20251101", "")
+        short_model = model.replace("claude-", "").replace("-20251101", "").replace("-20250929", "").replace("-20251001", "")
 
         lines.append(f"")
         lines.append(f"  [bold]{short_model}[/bold]")
@@ -369,38 +405,48 @@ def render_model_usage(model_usage: list[dict], summary: dict = None):
         lines.append(f"    Output:         {format_number(output_tok):>10}")
         lines.append(f"    Cache read:     {format_number(cache_read):>10}")
         lines.append(f"    Cache create:   {format_number(cache_create):>10}")
-
-        subtotal = input_tok + output_tok
-        lines.append(f"    [dim]Subtotal:       {format_number(subtotal):>10}[/dim]")
+        lines.append(f"    [dim]Cost:           ${cost:>9.2f}[/dim]")
 
         grand_input += input_tok
         grand_output += output_tok
         grand_cache_read += cache_read
         grand_cache_create += cache_create
-        grand_total += subtotal
+        grand_cost += cost
 
     lines.append("")
     lines.append(f"  [dim]{'─' * 60}[/dim]")
     lines.append(f"  [bold]Totals (all models)[/bold]")
     lines.append(f"    Input:          {format_number(grand_input):>10}")
     lines.append(f"    Output:         {format_number(grand_output):>10}")
-    lines.append(f"    Cache read:     {format_number(grand_cache_read):>10}  [dim](not billed)[/dim]")
+    lines.append(f"    Cache read:     {format_number(grand_cache_read):>10}  [dim](90% discount)[/dim]")
     lines.append(f"    Cache create:   {format_number(grand_cache_create):>10}")
-    lines.append(f"    [bold]Total:          {format_number(grand_total):>10}[/bold]  [dim](input + output)[/dim]")
+    lines.append(f"    [bold]Est. Cost:      ${grand_cost:>10.2f}[/bold]  [dim](all time)[/dim]")
 
-    # Include cache in "all tokens" total
-    all_tokens = grand_input + grand_output + grand_cache_read + grand_cache_create
-    lines.append(f"    [dim]All tokens:     {format_number(all_tokens):>10}  (including cache)[/dim]")
+    # Calculate weekly cost if we have weekly data
+    if weekly_data:
+        weekly_cost = 0.0
+        for day in weekly_data:
+            # Estimate cost per day - need to apportion by model
+            # For simplicity, use weighted average based on grand totals
+            day_total = day.get("total_tokens", 0)
+            if grand_input + grand_output + grand_cache_read + grand_cache_create > 0:
+                day_ratio = day_total / (grand_input + grand_output + grand_cache_read + grand_cache_create)
+                weekly_cost += grand_cost * day_ratio
+
+        lines.append(f"    [bold]Est. Weekly:    ${weekly_cost:>10.2f}[/bold]  [dim](last 7 days)[/dim]")
 
     if summary:
         lines.append("")
         lines.append(f"  [dim]{'─' * 60}[/dim]")
+        parts = []
         if summary.get("total_messages"):
-            lines.append(f"  Messages: {summary['total_messages']:,}")
+            parts.append(f"{summary['total_messages']:,} messages")
         if summary.get("total_sessions"):
-            lines.append(f"  Sessions: {summary['total_sessions']:,}")
+            parts.append(f"{summary['total_sessions']:,} sessions")
         if summary.get("first_session_date"):
-            lines.append(f"  Since: {summary['first_session_date']}")
+            parts.append(f"since {summary['first_session_date']}")
+        if parts:
+            lines.append(f"  {' · '.join(parts)}")
 
     lines.append("")
     console.print("\n".join(lines))
