@@ -49,7 +49,8 @@ async def model_stats(days: int = Query(default=30, ge=1, le=365)):
                 total_tokens=m['total_tokens'],
                 input_tokens=m['input_tokens'],
                 output_tokens=m['output_tokens'],
-                cache_read_tokens=m['cache_read_tokens']
+                cache_read_tokens=m['cache_read_tokens'],
+                cache_creation_tokens=m['cache_creation_tokens']
             )
             for m in data
         ]

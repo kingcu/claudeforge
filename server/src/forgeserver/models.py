@@ -111,6 +111,7 @@ class ModelStatsRecord(BaseModel):
     input_tokens: int
     output_tokens: int
     cache_read_tokens: int
+    cache_creation_tokens: int
 
 
 class ModelsResponse(BaseModel):

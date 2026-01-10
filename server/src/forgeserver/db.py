@@ -269,7 +269,8 @@ def get_model_stats(days: int = 30) -> list[dict]:
                 "input_tokens": r['input_tokens'],
                 "output_tokens": r['output_tokens'],
                 "cache_read_tokens": r['cache_read_tokens'],
-                "total_tokens": r['input_tokens'] + r['output_tokens']
+                "cache_creation_tokens": r['cache_creation_tokens'],
+                "total_tokens": r['input_tokens'] + r['output_tokens'] + r['cache_read_tokens'] + r['cache_creation_tokens']
             }
             for r in rows
         ]

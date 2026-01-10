@@ -146,3 +146,42 @@ def fetch_daily_stats(days: int = 30) -> list[dict] | None:
     except Exception as e:
         logger.warning(f"Failed to fetch stats: {e}")
         return None
+
+
+def fetch_model_stats() -> list[dict] | None:
+    """Fetch model usage stats from server. Returns None on failure."""
+    config = load_config()
+    if not config.get("server_url") or not config.get("api_key"):
+        return None
+
+    try:
+        with httpx.Client(timeout=SYNC_TIMEOUT) as client:
+            response = client.get(
+                f"{config['server_url']}/v1/stats/models",
+                headers={"X-API-Key": config["api_key"]}
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("models", [])
+    except Exception as e:
+        logger.warning(f"Failed to fetch model stats: {e}")
+        return None
+
+
+def fetch_totals() -> dict | None:
+    """Fetch total stats from server. Returns None on failure."""
+    config = load_config()
+    if not config.get("server_url") or not config.get("api_key"):
+        return None
+
+    try:
+        with httpx.Client(timeout=SYNC_TIMEOUT) as client:
+            response = client.get(
+                f"{config['server_url']}/v1/stats/totals",
+                headers={"X-API-Key": config["api_key"]}
+            )
+            response.raise_for_status()
+            return response.json()
+    except Exception as e:
+        logger.warning(f"Failed to fetch totals: {e}")
+        return None
