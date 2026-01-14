@@ -54,12 +54,23 @@ class ModelUsageRecord(BaseModel):
     cache_creation_tokens: int = Field(ge=0, default=0)
 
 
+class RawUsageRecord(BaseModel):
+    """Individual message usage record with UTC timestamp."""
+    timestamp: str
+    model: str
+    input_tokens: int = Field(ge=0, default=0)
+    output_tokens: int = Field(ge=0, default=0)
+    cache_read_tokens: int = Field(ge=0, default=0)
+    cache_creation_tokens: int = Field(ge=0, default=0)
+
+
 class SyncRequest(BaseModel):
     protocol_version: int = Field(ge=1, le=PROTOCOL_VERSION)
     hostname: str = Field(min_length=1, max_length=255)
     daily_activity: list[DailyActivityRecord] = Field(default_factory=list, max_length=MAX_SYNC_DAYS)
     daily_usage: list[DailyUsageRecord] = Field(default_factory=list, max_length=MAX_SYNC_DAYS)
     model_usage: list[ModelUsageRecord] = Field(default_factory=list)
+    raw_usage: list[RawUsageRecord] = Field(default_factory=list)
 
 
 # === Response Models ===

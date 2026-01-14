@@ -1,9 +1,27 @@
 """Terminal display using Rich."""
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from rich.console import Console
 from rich.table import Table
 
 console = Console()
+
+
+def _to_local_date(date_str: str) -> str:
+    """Convert a UTC timestamp to local date, or return date as-is."""
+    if not date_str:
+        return ""
+
+    try:
+        if "T" in date_str:
+            if date_str.endswith("Z"):
+                dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            else:
+                dt = datetime.fromisoformat(date_str)
+            return dt.astimezone().strftime("%Y-%m-%d")
+        else:
+            return date_str
+    except (ValueError, TypeError):
+        return date_str
 
 BAR_CHARS = " ▁▂▃▄▅▆▇█"
 GRAPH_HEIGHT = 12
@@ -89,7 +107,6 @@ def _calculate_streak(data: list[dict]) -> int:
 
     today = datetime.now().strftime('%Y-%m-%d')
     yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-
     dates_with_usage = {d["date"] for d in data if d.get("total_tokens", 0) > 0}
 
     # Start counting from today or yesterday
@@ -137,11 +154,12 @@ def render_recent_table(data: list[dict], days: int = 7):
 
     for day in recent:
         date_str = day["date"]
+        local_date = _to_local_date(date_str)
         total = day.get("total_tokens", 0)
 
-        # Day of week
+        # Day of week (use local date)
         try:
-            dt = datetime.strptime(date_str, '%Y-%m-%d')
+            dt = datetime.strptime(local_date, '%Y-%m-%d')
             dow = dt.strftime('%a')
         except ValueError:
             dow = "?"
@@ -175,7 +193,7 @@ def render_recent_table(data: list[dict], days: int = 7):
         else:
             trend = ""
 
-        table.add_row(date_str[5:], dow, tokens_str, pct_str, trend)
+        table.add_row(local_date[5:], dow, tokens_str, pct_str, trend)
         prev_total = total
 
     console.print()
@@ -275,15 +293,15 @@ def render_daily_graph(data: list[dict], title: str):
     num_days = len(totals)
     lines.append(f"       └{'─' * num_days}")
 
-    # Date labels - show first, middle, last for orientation
+    # Date labels - show first, middle, last for orientation (in local time)
     if data:
-        first = data[0]["date"][5:]  # MM-DD
-        last = data[-1]["date"][5:]
+        first = _to_local_date(data[0]["date"])[5:]  # MM-DD
+        last = _to_local_date(data[-1]["date"])[5:]
 
         if num_days >= 20:
             # Show first, middle, last
             mid_idx = num_days // 2
-            mid = data[mid_idx]["date"][5:]
+            mid = _to_local_date(data[mid_idx]["date"])[5:]
             lines.append(f"[dim]        {first}{'─' * (mid_idx - 3)}┬{'─' * (num_days - mid_idx - 3)}{last}[/dim]")
             lines.append(f"[dim]        {' ' * (mid_idx - 2)}{mid}[/dim]")
         elif num_days >= 10:
@@ -294,7 +312,7 @@ def render_daily_graph(data: list[dict], title: str):
         # Show the peak day
         max_tokens = max(totals)
         peak_idx = totals.index(max_tokens)
-        peak_date = data[peak_idx]["date"]
+        peak_date = _to_local_date(data[peak_idx]["date"])
         lines.append(f"[dim]        Peak: {peak_date} ({format_number(max_tokens)} tokens)[/dim]")
 
     lines.append("")
@@ -444,7 +462,7 @@ def render_model_usage(model_usage: list[dict], summary: dict = None, weekly_dat
         if summary.get("total_sessions"):
             parts.append(f"{summary['total_sessions']:,} sessions")
         if summary.get("first_session_date"):
-            parts.append(f"since {summary['first_session_date']}")
+            parts.append(f"since {_to_local_date(summary['first_session_date'])}")
         if parts:
             lines.append(f"  {' · '.join(parts)}")
 

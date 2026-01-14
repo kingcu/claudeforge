@@ -69,11 +69,26 @@ CREATE TABLE IF NOT EXISTS model_usage (
     FOREIGN KEY (hostname) REFERENCES machines(hostname) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS raw_usage (
+    id INTEGER PRIMARY KEY,
+    hostname TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    model TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(hostname, timestamp, model),
+    FOREIGN KEY (hostname) REFERENCES machines(hostname) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_daily_activity_date ON daily_activity(date);
 CREATE INDEX IF NOT EXISTS idx_daily_activity_hostname ON daily_activity(hostname);
 CREATE INDEX IF NOT EXISTS idx_daily_usage_date ON daily_usage(date);
 CREATE INDEX IF NOT EXISTS idx_daily_usage_hostname ON daily_usage(hostname);
 CREATE INDEX IF NOT EXISTS idx_model_usage_hostname ON model_usage(hostname);
+CREATE INDEX IF NOT EXISTS idx_raw_usage_timestamp ON raw_usage(timestamp);
+CREATE INDEX IF NOT EXISTS idx_raw_usage_hostname ON raw_usage(hostname);
 """
 
 
@@ -177,6 +192,22 @@ def sync_usage(request: SyncRequest) -> tuple[int, bool]:
             """, (request.hostname, record.model, record.input_tokens,
                   record.output_tokens, record.cache_read_tokens,
                   record.cache_creation_tokens))
+            count += 1
+
+        for record in request.raw_usage:
+            conn.execute("""
+                INSERT INTO raw_usage
+                    (hostname, timestamp, model, input_tokens, output_tokens,
+                     cache_read_tokens, cache_creation_tokens)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(hostname, timestamp, model) DO UPDATE SET
+                    input_tokens = excluded.input_tokens,
+                    output_tokens = excluded.output_tokens,
+                    cache_read_tokens = excluded.cache_read_tokens,
+                    cache_creation_tokens = excluded.cache_creation_tokens
+            """, (request.hostname, record.timestamp, record.model,
+                  record.input_tokens, record.output_tokens,
+                  record.cache_read_tokens, record.cache_creation_tokens))
             count += 1
 
         logger.info(f"Synced {count} records for {request.hostname}")

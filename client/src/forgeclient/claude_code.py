@@ -2,7 +2,7 @@
 import json
 import socket
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from collections import defaultdict
 
@@ -11,6 +11,15 @@ from .config import load_config
 STATS_CACHE_PATH = Path.home() / ".claude" / "stats-cache.json"
 CLAUDE_PROJECTS_PATH = Path.home() / ".claude" / "projects"
 PROTOCOL_VERSION = 1
+
+
+def _utc_timestamp_to_local_date(timestamp: str) -> str:
+    """Convert a UTC ISO timestamp to a local date string (YYYY-MM-DD)."""
+    if timestamp.endswith("Z"):
+        dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    else:
+        dt = datetime.fromisoformat(timestamp)
+    return dt.astimezone().strftime("%Y-%m-%d")
 
 
 def load_stats_cache() -> Optional[dict]:
@@ -57,18 +66,17 @@ def build_sync_payload(days: int = 365) -> dict:
                     "tool_call_count": entry.get("toolCallCount", 0)
                 })
 
-    # Parse daily usage from session files (full breakdown)
     daily_usage = _get_daily_usage_from_sessions(days)
-
-    # Parse model usage from session files (NOT stats-cache which is stale)
     model_usage = get_model_usage_from_sessions()
+    raw_usage = get_raw_usage_from_sessions(days)
 
     return {
         "protocol_version": PROTOCOL_VERSION,
         "hostname": get_hostname(),
         "daily_activity": daily_activity,
         "daily_usage": daily_usage,
-        "model_usage": model_usage
+        "model_usage": model_usage,
+        "raw_usage": raw_usage,
     }
 
 
@@ -105,7 +113,7 @@ def _get_daily_usage_from_sessions(days: int = 365) -> list[dict]:
                         if not timestamp:
                             continue
 
-                        date = timestamp[:10]
+                        date = _utc_timestamp_to_local_date(timestamp)
                         if date < cutoff:
                             continue
 
@@ -240,17 +248,14 @@ def get_daily_stats_from_sessions(days: int = 30) -> list[dict]:
                         if not usage:
                             continue
 
-                        # Get date from timestamp
                         timestamp = entry.get("timestamp")
                         if not timestamp:
                             continue
 
-                        # Parse ISO timestamp and get date
-                        date = timestamp[:10]  # YYYY-MM-DD
+                        date = _utc_timestamp_to_local_date(timestamp)
                         if date < cutoff:
                             continue
 
-                        # Accumulate tokens
                         daily_data[date]["input_tokens"] += usage.get("input_tokens", 0)
                         daily_data[date]["output_tokens"] += usage.get("output_tokens", 0)
                         daily_data[date]["cache_read_tokens"] += usage.get("cache_read_input_tokens", 0)
@@ -345,6 +350,51 @@ def get_model_usage_from_sessions() -> list[dict]:
     ]
 
 
+def get_raw_usage_from_sessions(days: int = 365) -> list[dict]:
+    """Extract raw per-message usage records with UTC timestamps."""
+    if not CLAUDE_PROJECTS_PATH.exists():
+        return []
+
+    cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+    records = []
+
+    for jsonl_file in CLAUDE_PROJECTS_PATH.glob("*/*.jsonl"):
+        try:
+            with open(jsonl_file, 'r') as f:
+                for line in f:
+                    try:
+                        entry = json.loads(line)
+                        if entry.get("type") != "assistant":
+                            continue
+
+                        message = entry.get("message", {})
+                        usage = message.get("usage", {})
+                        if not usage:
+                            continue
+
+                        timestamp = entry.get("timestamp")
+                        if not timestamp:
+                            continue
+
+                        if _utc_timestamp_to_local_date(timestamp) < cutoff:
+                            continue
+
+                        records.append({
+                            "timestamp": timestamp,
+                            "model": message.get("model", "unknown"),
+                            "input_tokens": usage.get("input_tokens", 0),
+                            "output_tokens": usage.get("output_tokens", 0),
+                            "cache_read_tokens": usage.get("cache_read_input_tokens", 0),
+                            "cache_creation_tokens": usage.get("cache_creation_input_tokens", 0),
+                        })
+                    except json.JSONDecodeError:
+                        continue
+        except (IOError, OSError):
+            continue
+
+    return records
+
+
 def get_summary_from_sessions() -> dict:
     """Get summary stats from session files."""
     if not CLAUDE_PROJECTS_PATH.exists():
@@ -365,7 +415,7 @@ def get_summary_from_sessions() -> dict:
                             total_messages += 1
                             timestamp = entry.get("timestamp")
                             if timestamp:
-                                date = timestamp[:10]
+                                date = _utc_timestamp_to_local_date(timestamp)
                                 if first_date is None or date < first_date:
                                     first_date = date
                     except json.JSONDecodeError:
